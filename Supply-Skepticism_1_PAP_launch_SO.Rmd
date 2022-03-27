@@ -183,13 +183,28 @@ D$wvs.geog.city.any<-as.numeric(D$wvs.geog.1=='city'|D$wvs.geog.2=='city')
 ## Constructing the localism scale from localism items.
 
 ## Create localism index
+##drop NAs in localism questions
 loc.pc<-D%>%
   select_if(grepl("loc\\.", names(.))) %>%
-  prcomp(na.action=na.omit)  
+  drop_na() %>%
+  prcomp()  
 ## Assign the principal components to the dataset.
 pc.x<-as.data.frame(loc.pc$x)
+###
 names(pc.x)<-paste0("loc.", names(pc.x))
-D<-cbind(D , pc.x)
+##add NAs for PCs where loc response is NA
+D_na <- D %>% filter(is.na(loc.leaders)|is.na(loc.say)) %>%
+  select(ResponseId) %>% mutate(PC1=NA)
+###
+rep_id <- D %>% filter(!is.na(loc.leaders)&!is.na(loc.say)) %>% dplyr::pull(ResponseId)
+pc.x <- pc.x %>% mutate(ResponseId= rep_id) %>%
+  dplyr::select(1, ResponseId)
+
+##we don't care about dimensions other than the 1st so just drop them.
+D <- left_join(D, pc.x, by="ResponseId") %>% left_join(D_na, by="ResponseId") %>%
+  mutate(loc.PC1 = ifelse(is.na(PC1),loc.PC1, PC1)) %>%
+  select(-c(PC1))
+
 D$loc.tot<-rowMeans(select(D, names(loc.pc$center)))
 ## This creates two measures of localism:
 ## loc.PC1 is the first principal component
@@ -208,10 +223,23 @@ D<-D%>%
 ## Create economic freedom index
 free.pc<-D%>%
   select_if(grepl("free\\.", names(.)))%>%
+  drop_na() %>% 
   prcomp() 
 pc.x<-as.data.frame(free.pc$x)
 names(pc.x)<-paste0("free.", names(pc.x))
-D<-cbind(D, pc.x)
+####
+D_na <- D %>% filter_at(vars(starts_with("free")), any_vars(is.na(.))) %>%
+  select(ResponseId) %>% mutate(PC1=NA)
+###
+rep_id <- D %>% filter_at(vars(starts_with("free")), all_vars(!is.na(.))) %>% dplyr::pull(ResponseId)
+pc.x <- pc.x %>% mutate(ResponseId= rep_id) %>%
+  dplyr::select(1, ResponseId)
+
+##we don't care about dimensions other than the 1st so just drop them.
+D <- left_join(D, pc.x, by="ResponseId") %>% left_join(D_na, by="ResponseId") %>%
+  mutate(free.PC1 = ifelse(is.na(PC1),free.PC1, PC1)) %>%
+  select(-c(PC1))
+
 D$free.tot<-rowMeans(select(D, names(free.pc$center)))
 ## free.PC1 is the first principal component
 ## econ.tot is a basic additive index of the items in the scale, assembled using ex ante beliefs about item directionality.
@@ -224,12 +252,24 @@ D<-D%>%
 ## Create knowledge index. 
 know.pc<-D%>%
   select_if(grepl("know\\.", names(.)))%>%
+  drop_na() %>%
   prcomp()  
 pc.x<-as.data.frame(know.pc$x)
 names(pc.x)<-paste0("know.", names(pc.x))
-D<-cbind(D, pc.x)
-D$know.tot<-rowMeans(select(D, names(know.pc$center)))
+####
+D_na <- D %>% filter_at(vars(starts_with("know")), any_vars(is.na(.))) %>%
+  select(ResponseId) %>% mutate(PC1=NA)
+###
+rep_id <- D %>% filter_at(vars(starts_with("know")), all_vars(!is.na(.))) %>% dplyr::pull(ResponseId)
+pc.x <- pc.x %>% mutate(ResponseId= rep_id) %>%
+  dplyr::select(1, ResponseId)
 
+##we don't care about dimensions other than the 1st so just drop them.
+D <- left_join(D, pc.x, by="ResponseId") %>% left_join(D_na, by="ResponseId") %>%
+  mutate(know.PC1 = ifelse(is.na(PC1),know.PC1, PC1)) %>%
+  select(-c(PC1))
+
+D$know.tot<-rowMeans(select(D, names(know.pc$center)))
 
 ## Engagement with local politics. 
 D<-D%>%
@@ -246,13 +286,25 @@ D<-D%>%
 ## Use engage.any or vote local as the primary measure?   
 engage.pc<-D%>%
   select(engage.count, engage.votelocal, engage.candidates)%>%
+  drop_na() %>%
   prcomp()  
 ## Assign the principal components to the dataset.
 pc.x<-as.data.frame(engage.pc$x)
 names(pc.x)<-paste0("engage.", names(pc.x))
-D<-cbind(D, pc.x)
 
-  
+####
+D_na <- D %>% filter_at(vars(starts_with("engage")), any_vars(is.na(.))) %>%
+  select(ResponseId) %>% mutate(PC1=NA)
+###
+rep_id <- D %>% filter_at(vars(starts_with("engage")), all_vars(!is.na(.))) %>% dplyr::pull(ResponseId)
+pc.x <- pc.x %>% mutate(ResponseId= rep_id) %>%
+  dplyr::select(1, ResponseId)
+
+##we don't care about dimensions other than the 1st so just drop them.
+D <- left_join(D, pc.x, by="ResponseId") %>% left_join(D_na, by="ResponseId") %>%
+  mutate(engage.PC1 = ifelse(is.na(PC1),engage.PC1, PC1)) %>%
+  select(-c(PC1))
+
 ## Text analysis recodes
 D<-D%>%
   mutate(landuse.consider=Q8.2)%>%
@@ -597,6 +649,8 @@ comp_corp %>% tokens(remove_punct = T) %>% tokens_remove(stopwords("english")) %
   dfm() %>% dfm_group(groups=type) %>% textplot_wordcloud(comparison = T, min_count=5)
 
 ```
+
+
 ```{r nlp3, fig.cap="Keyness Analysis: Those who Want Prices Higher vs. Lower and Renters vs. Owners."}
 
 set.seed(100)
@@ -606,8 +660,12 @@ key_analysis <- corpus(c(D$landuse.consider,D$landuse.goals, D$landuse.problems)
 key_analysis$high_low <- D$want.price2
 key_analysis$own_rent=D$ownhome
 
+###There are NAs in the data now, we have to drop them.
+
+key_analysis <- key_analysis %>% corpus_subset(!is.na(high_low)& !is.na(own_rent))
+
 ###Those who Want the prices Lower vs those who want it same or higher
-key_analysis%>%
+key_analysis %>%
   tokens(remove_punct = T) %>% 
   dfm() %>% textstat_keyness(., target = key_analysis$high_low=="Lower") %>% textplot_keyness()
 
@@ -629,6 +687,12 @@ comp_corp$type <- c(rep("consider",length(D$landuse.consider)), rep("goals", len
 
 comp_corp$high_low <- rep(D$want.price2,3)
 comp_corp$own_rent=rep(D$ownhome,3)
+
+###There are NAs in the data now, we have to drop them.
+
+comp_corp <- comp_corp %>% corpus_subset(!is.na(high_low)& !is.na(own_rent))
+
+
 
 ###Those who Want the prices Lower vs those who want it same or higher, Land Use questions
 
@@ -671,6 +735,10 @@ open_end_corp <- corpus(c(D$landuse.consider,D$landuse.goals, D$landuse.problems
 
 open_end_corp$own_rent <- D$ownhome
 
+##Remove NAs
+
+open_end_corp <- open_end_corp %>% corpus_subset(!is.na(own_rent))
+
 pos_neg <- data_dictionary_LSD2015[1:2]
 
 toks_open_end <- tokens(open_end_corp, remove_punct = T)
@@ -709,7 +777,8 @@ open_end_corp$employed_ft <- D$employed.ft
 
 oe_dfm <- dfm(open_end_corp, remove_numbers = TRUE, remove_punct = TRUE, remove_symbols = TRUE, remove = stopwords("english"))
 
-oe_dfm_trim <- dfm_trim(oe_dfm, min_docfreq = 0.075, max_docfreq = 0.90, docfreq_type = "prop") 
+###Gotta change the frequency trims
+oe_dfm_trim <- dfm_trim(oe_dfm, min_docfreq = 0.01, max_docfreq = 0.99, docfreq_type = "prop") 
 topic.count <- 10
 
 dfm2stm <- convert(oe_dfm_trim, to = "stm")
