@@ -30,6 +30,8 @@ library(estimatr)
 library(gmodels)
 library(modelsummary)
 library(janitor)
+library(GGally)
+library(ggrepel)
 options(dplyr.width=Inf)
 # checkpoint(snapshot_date = "2022-02-28", R.version = "4.1.2")
 # theme_gtsummary_journal("jama") # formats confidence intervals in tables
@@ -1074,7 +1076,7 @@ SO 3-15: I wonder if this might be a little outside the scope of our first paper
 We report the difference of means for predicted effects on housing stock increase as well as effects on rental prices for each treatment condition, split across the average price tercile for each respondent city. Here is a representative figure. We will report analogous results for all four outcome variables (quantity, neighborhood rent, neighborhood home value, and citywide rent), and for the target splits of the data (\$ownhome, \$want.price2).
 
 
-```{r results GD figs}
+```{r results GD figs, fig.cap="All Respondents."}
 
 D %>% group_by(GD.treat, price.city.tercile) %>%
   summarise(mean=gmodels::ci(GD.quant,na.rm=T)[1],
@@ -1105,7 +1107,7 @@ D %>% group_by(GD.treat, price.city.tercile) %>%
 
 We also introduce economic knowledge as a covariate. We expect the interactions between \$rent.city.tercile and \$know.PC1, and between \$GD.treat and \$know.PC1, to be positive. That is, the difference between high-knowledge and low-knowledge respondents will manifest in the high-price markets where rezoning is most likely to affect quantity and thus price. (Eval=F to speed knitting.)
 
-```{r results GD econ}
+```{r results GD econ, results='asis'}
 
 yvar <- c("GD.quant", "GD.rentc.nabe", "GD.pricec.nabe", "GD.rentc.city", "GD.rento.nabe", "GD.priceo.nabe", "GD.rento.city")  
 
@@ -1116,58 +1118,115 @@ terms.1 <- "~ GD.treat + rent.city.tercile + GD.treat:rent.city.tercile"
 terms.2 <- "~ GD.treat + know.PC1 + GD.treat:know.PC1"
 terms.3 <- "~ GD.treat + rent.city.tercile + know.PC1 + GD.treat:rent.city.tercile + GD.treat:know.PC1 + GD.treat:rent.city.tercile:know.PC1"
 
-terms <- list(terms.0, terms.1, terms.2, terms.3)
+all_terms <- c(terms.0, terms.1, terms.2, terms.3)
 
-lmlist.GD.all <- lmlist.GD.owner <- lmlist.GD.tenant <- lmlist.GD.lower <- lapply(lmlist.GD.notlower<-vector(mode = 'list', length(terms)), function(x) x<-vector(mode='list', length(yvar)))
+for (i in seq_along(yvar)){
+terms <- paste0(yvar[i], " ", all_terms) 
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GD.all[[i]][[j]]<-D%>%
- lm(formula=as.formula(paste0(yvar[j], terms[[i]])), data=.)%>%
- tbl_regression(intercept=TRUE)
-}
-tbl_merge(lmlist.GD.all[[i]],  tab_spanner = col.labels)
-}
+terms %>% 
+    map(~ lm(.x, data=D)) %>%
+  modelsummary(title=paste0("All Respondents: DV = ",yvar[i]))  -> x
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GD.owner[[i]][[j]]<-D%>%
- filter(ownhome == 1) %>%
- lm(formula=as.formula(paste0(yvar[j], terms[[i]])), data=.)%>%
- tbl_regression(intercept=TRUE)
-}
-tbl_merge(lmlist.GD.all[[i]],  tab_spanner = col.labels)
-}
+print(x)
+  
+  #   map_dfr(tidy, .id="model") %>%
+  # ggplot(aes(x=estimate, y=factor(term),group=factor(model), color=factor(model))) + 
+  # geom_point(aes(group=model,color=model), position=position_dodge(width=.8)) +
+  # geom_errorbarh(aes(group=model,color=model,xmin=estimate-std.error,xmax=estimate+std.error), position=position_dodge(width=.8)) + 
+  # geom_text_repel(aes(label=paste0(round(estimate,2), " (",round(std.error,2),")"))) +
+  # theme_bw() +theme(legend.position = "none") +ggtitle(yvar[i]) 
+  
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GD.tenant[[i]][[j]]<-D%>%
- filter(ownhome != 1) %>%
- lm(formula=as.formula(paste0(yvar[j], terms[[i]])), data=.)%>%
- tbl_regression(intercept=TRUE)
-}
-tbl_merge(lmlist.GD.all[[i]],  tab_spanner = col.labels)
-}
+}  
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GD.notlower[[i]][[j]]<-D%>%
- filter(want.price2 == "Not_lower") %>%
- lm(formula=as.formula(paste0(yvar[j], terms[[i]])), data=.)%>%
- tbl_regression(intercept=TRUE)
-}
-tbl_merge(lmlist.GD.all[[i]],  tab_spanner = col.labels)
-}
+```
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GD.lower[[i]][[j]]<-D%>%
- filter(want.price2 == "Lower") %>%
- lm(formula=as.formula(paste0(yvar[j], terms[[i]])), data=.)%>%
- tbl_regression(intercept=TRUE)
-}
-tbl_merge(lmlist.GD.all[[i]],  tab_spanner = col.labels)
-}
+
+
+```{r GD homeowners, fig.cap="Homeowners.", results="asis"}
+all_terms <- c(terms.0, terms.1, terms.2, terms.3)
+
+for (i in seq_along(yvar)){
+terms <- paste0(yvar[i], " ", all_terms) 
+
+terms %>% 
+    map(~ lm(.x, data=D %>% filter(ownhome==1))) %>%
+  modelsummary(title=paste0("Homeowners: DV = ",yvar[i]))  -> x
+
+print(x)
+
+  
+    #   map_dfr(tidy, .id="model") %>%
+  # ggplot(aes(x=estimate, y=factor(term),group=factor(model), color=factor(model))) + 
+  # geom_point(aes(group=model,color=model), position=position_dodge(width=.8)) +
+  # geom_errorbarh(aes(group=model,color=model,xmin=estimate-std.error,xmax=estimate+std.error), position=position_dodge(width=.8)) + 
+  # geom_text_repel(aes(label=paste0(round(estimate,2), " (",round(std.error,2),")"))) +
+  # theme_bw() +theme(legend.position = "none") +ggtitle(yvar[i]) 
+}  
+
+
+
+```
+
+
+```{r GD renters, fig.cap="Renters."}
+
+
+all_terms <- c(terms.0, terms.1, terms.2, terms.3)
+
+for (i in seq_along(yvar)){
+terms <- paste0(yvar[i], " ", all_terms) 
+
+terms %>% 
+    map(~ lm(.x, data=D %>% filter(ownhome==0))) %>%
+  modelsummary(title=paste0("Renters: DV = ",yvar[i]))  -> x
+
+print(x)
+
+  
+}  
+
+
+
+```
+
+
+```{r notlower, fig.cap="Those Who Want Prices Higher/Same.", results='asis'}
+
+all_terms <- c(terms.0, terms.1, terms.2, terms.3)
+
+for (i in seq_along(yvar)){
+terms <- paste0(yvar[i], " ", all_terms) 
+
+terms %>% 
+    map(~ lm(.x, data=D %>%  filter(want.price2 == "Not_lower"))) %>%
+  modelsummary(title=paste0("Want Prices Higher/Same: DV = ",yvar[i]))  -> x
+
+print(x)
+
+}  
+
+
+
+
+```
+
+
+```{r pricesLower, fig.cap="Those Who Want Prices Lower.", results='asis'}
+
+
+for (i in seq_along(yvar)){
+terms <- paste0(yvar[i], " ", all_terms) 
+
+terms %>% 
+    map(~ lm(.x, data=D %>%  filter(want.price2 == "Lower"))) %>%
+  modelsummary(title=paste0("Want Prices Lower: DV = ",yvar[i]))  -> x
+
+print(x)
+
+}  
+
+
 
 ```
 
@@ -1282,7 +1341,7 @@ D %>% group_by(price.city.tercile) %>%
 ```
 
 
-```{r results GD support models}
+```{r results GD support models, results='asis'}
 
 yvar <- "GD.support"
 
@@ -1300,53 +1359,84 @@ terms.2 <- "~ rent.city.tercile + know.PC1 + know.PC1:rent.city.tercile + free.P
 terms.3 <- "~ GD.rentc.nabe + GD.pricec.nabe + free.PC1 + ideo.PC1 + loc.PC1"
 terms.4 <- "~ GD.rento.nabe + GD.priceo.nabe + free.PC1 + ideo.PC1 + loc.PC1"
 
-terms <- list(terms.0, terms.1, terms.2, terms.3, terms.4)
+all_terms <- c(terms.1, terms.2, terms.3, terms.4)
 
-lmlist.GDsupport.all <- lmlist.GDsupport.owner <- lmlist.GDsupport.tenant <- lmlist.GDsupport.lower <- lapply(lmlist.GDsupport.notlower<-vector(mode = 'list', length(terms)), function(x) x<-vector(mode='list', length(yvar)))
+# lmlist.GDsupport.all <- lmlist.GDsupport.owner <- lmlist.GDsupport.tenant <- lmlist.GDsupport.lower <- lapply(lmlist.GDsupport.notlower<-vector(mode = 'list', length(terms)), function(x) x<-vector(mode='list', length(yvar)))
 
+
+terms <- paste0(yvar, " ", all_terms) 
+
+terms %>% 
+    map(~ lm(.x, data=D)) %>%
+  modelsummary(title=paste0("All Respondents: DV = ",yvar))  -> x
+
+print(x)
+
+
+
+```
+
+
+
+```{r homeowners, fig.cap="Homeowners.", results='asis'}
+
+
+terms <- paste0(yvar, " ", all_terms) 
+
+terms %>% 
+    map(~ lm(.x, data=D%>%
+ filter(ownhome == 1) )) %>%
+  modelsummary(title=paste0("Homeowners: DV = ",yvar))  -> x
+
+print(x)
+
+
+```
 for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GDsupport.all[[i]][[j]]<-D%>%
- lm_robust(formula=as.formula(paste0(yvar[j], terms[[i]])), data=., se_type="stata", clusters=GD.treat)%>%
- tbl_regression(intercept=TRUE)
-}
-}
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GDsupport.owner[[i]][[j]]<-D%>%
- filter(ownhome == 1) %>% 
- lm_robust(formula=as.formula(paste0(yvar[j], terms[[i]])), data=., se_type="stata", clusters=GD.treat)%>%
- tbl_regression(intercept=TRUE)
-}
-}
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GDsupport.tenant[[i]][[j]]<-D%>%
- filter(ownhome != 1) %>% 
- lm_robust(formula=as.formula(paste0(yvar[j], terms[[i]])), data=., se_type="stata", clusters=GD.treat)%>%
- tbl_regression(intercept=TRUE)
-}
-}
+```{r renters, fig.cap="Renters.", results='asis'}
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GDsupport.notlower[[i]][[j]]<-D%>%
- filter(want.price2 == "Not_lower") %>% 
- lm_robust(formula=as.formula(paste0(yvar[j], terms[[i]])), data=., se_type="stata", clusters=GD.treat)%>%
- tbl_regression(intercept=TRUE)
-}
-}
 
-for(i in 1:length(terms)){
-for(j in 1:length(yvar)){
- lmlist.GDsupport.lower[[i]][[j]]<-D%>%
- filter(want.price2 == "Lower") %>% 
- lm_robust(formula=as.formula(paste0(yvar[j], terms[[i]])), data=., se_type="stata", clusters=GD.treat)%>%
- tbl_regression(intercept=TRUE)
-}
-}
+terms <- paste0(yvar, " ", all_terms) 
+
+terms %>% 
+    map(~ lm(.x, data=D%>%
+ filter(ownhome == 0) )) %>%
+  modelsummary(title=paste0("Renters: DV = ",yvar))  -> x
+
+print(x)
+
+
+```
+
+
+```{r pricesHigher, results='asis'}
+
+terms <- paste0(yvar, " ", all_terms) 
+
+terms %>% 
+    map(~ lm(.x, data=D%>%
+ filter(want.price2 == "Not_lower") )) %>%
+  modelsummary(title=paste0("Want Prices Higher: DV = ",yvar))  -> x
+
+print(x)
+
+
+
+```
+
+
+```{r prices lower, results='asis'}
+
+terms %>% 
+    map(~ lm(.x, data=D%>%
+ filter(want.price2 == "Lower") )) %>%
+  modelsummary(title=paste0("Want Prices Lower: DV = ",yvar))  -> x
+
+print(x)
+
+
 
 ```
 
