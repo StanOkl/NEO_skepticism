@@ -1,0 +1,748 @@
+---
+title: "Manhattan Institute Presentation"
+author: "Chris Elmendorf^[School of Law ,UC Davis], Clayton Nall^[Dept. of Political Science, UC Santa Barbara] and Stan Oklobdzija^[School of Public Policy, UC Riverside]."
+date: "April 8, 2022"
+header-includes:
+- \usepackage{caption}
+- \captionsetup[figure]{labelformat=empty}
+output: 
+  beamer_presentation
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F)
+library(tidyverse)
+library(gtsummary)
+library(ordinal)
+library(checkpoint)
+library(here)
+library(gtools)
+library(tidymodels)
+library(readxl)
+library(corrr)
+library(quanteda)
+library(quanteda.textplots)
+library(quanteda.textstats)
+library(naniar)
+library(stm)
+library(estimatr)
+library(gmodels)
+library(modelsummary)
+library(janitor)
+library(GGally)
+library(ggrepel)
+library(dotwhisker)
+options(dplyr.width=Inf)
+
+```
+
+
+```{r readrecode, cache=T, message=F, echo=F, warning=F}
+testing<-F # Toggle if you want to add test values
+
+###set path for my local machine
+
+D <- read_csv(here("data", "neo--supply-skepticism-1" , "NEO - Supply Skepticism Experiment--Final_March 25, 2022_11.22.csv"))[-c(1,2),]
+if(testing){
+  D$rent_zip<-as.character(runif(nrow(D), min=200, max=4000))
+  D$price_zip<-as.character(runif(nrow(D), min=50000, max=2000000))
+  D$rent_city<-as.character(runif(nrow(D), min=200, max=4000))
+  D$price_city<-as.character(runif(nrow(D), min=50000, max=2000000))
+  }
+
+## CE post PAP. Check for speeders per CN's request
+# D %>% 
+#   filter(Finished == "1") %>%
+#   rename(duration_in_seconds = `Duration (in seconds)`) %>%
+#   mutate(
+#     seconds = as.numeric(duration_in_seconds),
+#     minutes = factor(case_when(
+#       seconds < 5*60 ~ "Less than 5 min",
+#       seconds >= 5*60 & seconds < 7*60 ~ "5-7 min",
+#       seconds >= 7*60 & seconds < 9*60 ~ "7-9 min",
+#       seconds >= 9*60 & seconds < 11*60 ~ "9-11 min",
+#       seconds >= 11*60 & seconds < 15*60 ~ "11-15 min",
+#       seconds >= 15*60 & seconds < 20*60 ~ "15-20 min",
+#       seconds >= 20*60 ~ "More than 20 min"
+#     ), levels = c("Less than 5 min","5-7 min","7-9 min","9-11 min","11-15 min","15-20 min","More than 20 min"))
+#   ) %>% 
+#   group_by(minutes) %>%
+#   summarize(n = n())
+
+
+##This block divides the respondents' cities into rent terciles
+# D <- D %>% mutate(rent_tercile = case_when(as.numeric(rent_city) <= quantile(as.numeric(rent_city),.33 ) ~ 1,
+#                                              as.numeric(rent_city) >= quantile(as.numeric(rent_city),.66) ~ 3,
+#                                              TRUE ~ 2)) 
+
+
+D<-D[-c(1:20),]
+
+D<-D%>%
+  mutate(age.cat=recode(Q6.1,'1'='18-29', '2'='30-44', 
+                        '3'='45-64', '4'='65 plus'))%>%
+  mutate(male=as.numeric(Q6.2=='1'))
+
+D$race.eth<-NA
+D$race.eth[D$Q6.3=="1"]<-"White"
+D$race.eth[D$Q6.3=="2"]<-"Black"
+D$race.eth[D$Q6.3=="4"]<-"Asian"
+## Order is important here; any Hispanic supersedes race.
+D$race.eth[grep("3", D$Q6.3)]<-"Hispanic"
+D$race.eth[D$Q6.3%in%c("5", "6")]<-"Multi/Other"
+D$race.eth[is.na(D$race.eth)]<-"Multi/Other"
+
+D<-D%>%
+  mutate(has.ba=as.numeric(Q6.4%in%c('3', '4', '5', '6', '7', '8')))%>%
+  mutate(ownhome=as.numeric(Q6.5=='1'))%>%
+  mutate(employed.ft=as.numeric(Q6.6=='1'))%>%
+  mutate(want.price=recode(Q6.7, '1'='Higher', '2'='Same', '3'='Lower'))%>%
+  mutate(student=as.numeric(D$Q6.8%in%c('1', '2', '3')))%>%
+  mutate(has.kids=as.numeric(D$Q6.9=='1'))%>%
+  mutate(married.partner=as.numeric(D$Q6.10%in%c(3,4)))
+
+D<-D%>%
+  mutate(loc.say=as.numeric(Q7.2=='2'))%>%
+  mutate(loc.leaders=as.numeric(Q7.3=='2'))%>%
+  mutate(wvs.geog.1=recode(Q7.4, '1'='city', '2'='state', '3'='country', '4'='continent', '5'='world'))
+D$wvs.geog.2<-NA
+D$wvs.geog.2[D$Q7.6=='1'|D$Q7.7=='1'|D$Q7.8=='1'|D$Q7.9=='1']<-'city'
+D$wvs.geog.2[D$Q7.5=='1'|D$Q7.7=='2'|D$Q7.8=='2'|D$Q7.9=='2']<-'state'
+D$wvs.geog.2[D$Q7.5=='2'|D$Q7.6=='2'|D$Q7.8=='3'|D$Q7.9=='3']<-'country'
+D$wvs.geog.2[D$Q7.5=='3'|D$Q7.6=='3'|D$Q7.7=='3'|D$Q7.9=='4']<-'continent'
+D$wvs.geog.2[D$Q7.5=='4'|D$Q7.6=='4'|D$Q7.7=='4'|D$Q7.8=='4']<-'world'
+
+## People list city/town as the place they identify with the most.
+D$wvs.geog.city<-as.numeric(D$wvs.geog.1=="city")
+D$wvs.geog.city.any<-as.numeric(D$wvs.geog.1=='city'|D$wvs.geog.2=='city')
+## Constructing the localism scale from localism items.
+
+## Create localism index
+##drop NAs in localism questions
+loc.pc<-D%>%
+  select_if(grepl("loc\\.", names(.))) %>%
+  drop_na() %>%
+  prcomp()  
+## Assign the principal components to the dataset.
+pc.x<-as.data.frame(loc.pc$x)
+###
+names(pc.x)<-paste0("loc.", names(pc.x))
+##add NAs for PCs where loc response is NA
+D_na <- D %>% filter(is.na(loc.leaders)|is.na(loc.say)) %>%
+  select(ResponseId) %>% mutate(PC1=NA)
+###
+rep_id <- D %>% filter(!is.na(loc.leaders)&!is.na(loc.say)) %>% dplyr::pull(ResponseId)
+pc.x <- pc.x %>% mutate(ResponseId= rep_id) %>%
+  dplyr::select(1, ResponseId)
+
+##we don't care about dimensions other than the 1st so just drop them.
+D <- left_join(D, pc.x, by="ResponseId") %>% left_join(D_na, by="ResponseId") %>%
+  mutate(loc.PC1 = ifelse(is.na(PC1),loc.PC1, PC1)) %>%
+  select(-c(PC1))
+
+D$loc.tot<-rowMeans(select(D, names(loc.pc$center)))
+## This creates two measures of localism:
+## loc.PC1 is the first principal component
+## loc.tot is a basic additive index of the items in the scale, assembled using ex ante beliefs about item directionality.
+
+## Recode "economic freedom" questions
+D<-D%>%
+  mutate(free.tradegood=as.numeric(Q37.1==1))%>%
+  mutate(free.notradeboard=as.numeric(Q37.2))%>% ##Reversing direction so that positive is to oppose wage boards CE 2022.04.03: original coding in Qualtrics had higher numbers signifying more opposiion, so I eliminated the reverse coding
+  mutate(free.charter=6-as.numeric(Q37.3))%>% #Reverse coding so that 5 is most supportive of charters
+  mutate(free.privatize=6-as.numeric(Q37.4))%>%
+  mutate(free.choice=6-as.numeric(Q37.5))%>%
+  mutate(free.rentvoucher=as.numeric(Q37.6=='1'))%>%
+  mutate(free.norentcontrol=as.numeric(Q37.7=='2'))
+
+## Create economic freedom index
+free.pc<-D%>%
+  select_if(grepl("free\\.", names(.)))%>%
+  drop_na() %>% 
+  prcomp() 
+pc.x<-as.data.frame(free.pc$x)
+names(pc.x)<-paste0("free.", names(pc.x))
+####
+D_na <- D %>% filter_at(vars(starts_with("free")), any_vars(is.na(.))) %>%
+  select(ResponseId) %>% mutate(PC1=NA)
+###
+rep_id <- D %>% filter_at(vars(starts_with("free")), all_vars(!is.na(.))) %>% dplyr::pull(ResponseId)
+pc.x <- pc.x %>% mutate(ResponseId= rep_id) %>%
+  dplyr::select(1, ResponseId)
+
+##we don't care about dimensions other than the 1st so just drop them.
+D <- left_join(D, pc.x, by="ResponseId") %>% left_join(D_na, by="ResponseId") %>%
+  mutate(free.PC1 = ifelse(is.na(PC1),free.PC1, PC1)) %>%
+  select(-c(PC1))
+
+D$free.tot<-rowMeans(select(D, names(free.pc$center)))
+## free.PC1 is the first principal component
+## econ.tot is a basic additive index of the items in the scale, assembled using ex ante beliefs about item directionality.
+
+## Economic ``knowledge" fields
+D<-D%>%
+  mutate(know.trade=as.numeric(Q36.1=='2'))%>%
+  mutate(know.used=as.numeric(Q36.2=='1'))
+
+## Create knowledge index. 
+know.pc<-D%>%
+  select_if(grepl("know\\.", names(.)))%>%
+  drop_na() %>%
+  prcomp()  
+pc.x<-as.data.frame(know.pc$x)
+names(pc.x)<-paste0("know.", names(pc.x))
+####
+D_na <- D %>% filter_at(vars(starts_with("know")), any_vars(is.na(.))) %>%
+  select(ResponseId) %>% mutate(PC1=NA)
+###
+rep_id <- D %>% filter_at(vars(starts_with("know")), all_vars(!is.na(.))) %>% dplyr::pull(ResponseId)
+pc.x <- pc.x %>% mutate(ResponseId= rep_id) %>%
+  dplyr::select(1, ResponseId)
+
+##we don't care about dimensions other than the 1st so just drop them.
+D <- left_join(D, pc.x, by="ResponseId") %>% left_join(D_na, by="ResponseId") %>%
+  mutate(know.PC1 = ifelse(is.na(PC1),know.PC1, PC1)) %>%
+  select(-c(PC1))
+
+D$know.tot<-rowMeans(select(D, names(know.pc$center)))
+
+## Engagement with local politics. 
+D<-D%>%
+  mutate(engage.votelocal=as.numeric(Q40.4=='1'))%>%
+  mutate(engage.candidates=as.numeric(Q40.5))%>%
+  mutate(locgov.careissues=as.numeric(Q40.6=='1'))%>%
+  mutate(engage.petition=as.numeric(grepl("1", Q40.7)))%>%
+  mutate(engage.petition=as.numeric(grepl("1", Q40.7)))%>%
+  mutate(engage.nbhdmtg=as.numeric(grepl("2", Q40.7)))%>%
+  mutate(engage.hearing=as.numeric(grepl("3", Q40.7)))%>%
+  mutate(engage.contact=as.numeric(grepl("4", Q40.7)))%>%
+  mutate(engage.count=engage.petition+engage.nbhdmtg+engage.hearing+engage.contact)
+  
+## Use engage.any or vote local as the primary measure?   
+engage.pc<-D%>%
+  select(engage.count, engage.votelocal, engage.candidates)%>%
+  drop_na() %>%
+  prcomp()  
+## Assign the principal components to the dataset.
+pc.x<-as.data.frame(engage.pc$x)
+names(pc.x)<-paste0("engage.", names(pc.x))
+
+####
+D_na <- D %>% filter_at(vars(starts_with("engage")), any_vars(is.na(.))) %>%
+  select(ResponseId) %>% mutate(PC1=NA)
+###
+rep_id <- D %>% filter_at(vars(starts_with("engage")), all_vars(!is.na(.))) %>% dplyr::pull(ResponseId)
+pc.x <- pc.x %>% mutate(ResponseId= rep_id) %>%
+  dplyr::select(1, ResponseId)
+
+##we don't care about dimensions other than the 1st so just drop them.
+D <- left_join(D, pc.x, by="ResponseId") %>% left_join(D_na, by="ResponseId") %>%
+  mutate(engage.PC1 = ifelse(is.na(PC1),engage.PC1, PC1)) %>%
+  select(-c(PC1))
+
+## Text analysis recodes
+D<-D%>%
+  mutate(landuse.consider=Q8.2)%>%
+  mutate(landuse.goals=Q8.3)%>%
+  mutate(landuse.problems=Q8.4)
+
+## National political ideology questions 
+D<-D%>%
+  mutate(libcon=as.numeric(recode(Q40.2, '1'='-1', '2'='0', '3'='1', '4'=NULL))) %>%
+  mutate(voted20=as.numeric(Q40.3))%>%
+  mutate(pid3.nolean=recode(Q40.8, '1'='dem', '2'='rep', '3'='io', '4'='io'))
+D$pid3.wlean<-D$pid3.nolean
+D$pid3.wlean[D$Q40.11=='1']<-'dem'
+D$pid3.wlean[D$Q40.11=='2']<-'rep'
+
+D <- D %>%
+  mutate(
+    repub = as.numeric(Q40.10), # 1 = Strong, 2 = Not so strong
+    dem = as.numeric(recode(Q40.9, '1'='7', '2'='6')),
+    ind = as.numeric(recode(Q40.11, '1'='5', '2'='3', '3'='4')),
+    pid7 = coalesce(repub, dem, ind)
+  ) %>%
+  select(-repub, -dem, -ind)
+
+ideo.pc<-D%>%
+  select(libcon, pid7) %>%
+  na.omit() %>%
+  prcomp()  
+pc.x<-as.data.frame(ideo.pc$x)
+names(pc.x)<-paste0("ideo.", names(pc.x))
+D<-merge(D, pc.x, by = 'row.names', all.x = T) %>%
+  select(-Row.names)
+
+
+## CE: Effect of regional 10% supply shock. Q33.1 is city rento (ordinal), Q33.2 and Q33.3 is city rentc (cardinal). Suggested variable naming covention: $shock10.rento.city, $shock10.rentc.city. Workflow for creating rentc variables is (1) assign value of 0 if Q33.1 == 3; (2) assign values of -0.01, -0.05, -0.10, -0.15, -0.20, -0.25, -0.30, respectively, if Q33.2 == 1, 2..., 7. (3) assign 0.01, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, respectively, if Q33.3 == 1, 2..., 7. 
+
+D<-D%>%
+  mutate(
+    shock10.rento.city=6-as.numeric(Q33.1),
+    shock10.rentc.city.down=recode(Q33.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30),
+    shock10.rentc.city.up=recode(Q33.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+  )
+D$shock10.rentc.city<-NA
+D$shock10.rentc.city[D$shock10.rento.city==3]<-0
+D$shock10.rentc.city[!is.na(D$shock10.rentc.city.down)]<-D$shock10.rentc.city.down[!is.na(D$shock10.rentc.city.down)]
+D$shock10.rentc.city[!is.na(D$shock10.rentc.city.up)]<-D$shock10.rentc.city.up[!is.na(D$shock10.rentc.city.up)]
+
+D<-D%>%
+  mutate(
+    shock10.priceo.city=6-as.numeric(Q34.1),
+    shock10.pricec.city.down=recode(Q34.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30),
+    shock10.pricec.city.up=recode(Q34.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+  )
+D$shock10.pricec.city<-NA
+D$shock10.pricec.city[D$shock10.priceo.city==3]<-0
+D$shock10.pricec.city[!is.na(D$shock10.pricec.city.down)]<-D$shock10.pricec.city.down[!is.na(D$shock10.pricec.city.down)]
+D$shock10.pricec.city[!is.na(D$shock10.pricec.city.up)]<-D$shock10.pricec.city.up[!is.na(D$shock10.pricec.city.up)]
+
+## Effect of rezoning. 
+D<-D%>%
+  mutate(GD.treat=recode(GD_branch, '1'='neighborhood', '2'='city', '3'='state'))
+
+D$GD.support<-NA
+
+# Support outcome ($GD.support): (Q11.1, Q11.5), (Q19.1, Q19.5), (Q26.1, Q26.5). Here's the coding protocol. For Q11.1, replace value with Q11.5 if Q11.2 != 1. For Q19.1, replace value with Q19.5 if Q19.2 != 2. For 26.1, replace value with Q26.5 if Q26.2 != 3. Consider reversing default Qualtrics coding so that higher values correspond to stronger suppot. 
+
+D <-  D %>% mutate_at(vars(Q11.1,Q11.5, Q19.1,Q19.2,Q19.5, Q26.1, Q26.5), as.numeric) %>%
+  mutate(GD.support = case_when(!is.na(Q11.1)& Q11.2 == 1 ~ Q11.1,
+                                    !is.na(Q11.1) & Q11.2 != 1 ~ Q11.5,
+                                    is.na(Q11.1) &!is.na(Q19.1)& Q19.2==2 ~ Q19.1,
+                                    is.na(Q11.1) & !is.na(Q19.1) & Q19.2!=2 ~ Q19.5,
+                                    is.na(Q11.1) & is.na(Q19.1) &!is.na(Q26.1)&Q26.2==3  ~ Q26.1,
+                                    is.na(Q11.1) &is.na(Q19.1)&!is.na(Q26.1)&Q26.2!=3 ~ Q26.5)) %>%
+  mutate(GD.support = 6-as.numeric(GD.support))                                  
+  
+
+###This produces 245 NA's. Better code above. 
+# D$GD.support[!is.na(D$Q11.1)]<-D$Q11.1[!is.na(D$Q11.1)]
+# D$GD.support[D$Q11.2!=1]<-D$Q11.5[D$Q11.2!=1]
+# D$GD.support[!is.na(D$Q19.1)]<-D$Q19.1[!is.na(D$Q19.1)]
+# D$GD.support[D$Q19.2!=2]<-D$Q19.5[D$Q19.2!=2]
+# D$GD.support[!is.na(D$Q26.1)]<-D$Q26.1[!is.na(D$Q26.1)]
+# D$GD.support[D$Q26.2!=3]<-D$Q26.5[D$Q26.2!=3]
+# D$GD.support<-6-as.numeric(D$GD.support)
+
+# Quantity outcome ($GD.quant): Q17.1, Q24.1, Q31.1 (coalesce into $GD.quant and consider reversing the default Qualtrics coding so that higher values correspond to bigger positive effect on metro housing stock)
+
+D <- D %>% mutate_at(vars(Q17.1,Q24.1, Q31.1), as.numeric) %>%
+  mutate(GD.quant = case_when(!is.na(Q17.1) ~ Q17.1,
+                                          is.na(Q17.1) & !is.na(Q24.1) ~ Q24.1,
+                                          is.na(Q17.1) & is.na(Q24.1) ~ Q31.1)) %>%
+  mutate(GD.quant = 6-GD.quant)
+
+###This code is messed up here. It's just inputting Q17.1 not values from 24.1 or 31.1, (metro and state stock.) I fixed it above
+# D$GD.quant<-NA
+# D$GD.quant[!is.na(D$Q17.1)]<-D$Q17.1[!is.na(D$Q17.1)]
+# D$GD.quant[!is.na(D$Q24.1)]<-D$Q17.1[!is.na(D$Q24.1)]
+# D$GD.quant[!is.na(D$Q31.1)]<-D$Q17.1[!is.na(D$Q31.1)]
+# D$GD.quant<-6-as.numeric(D$GD.quant)
+
+# Nabe home value outcome ($GD.priceo.nabe, $GD.pricec.nabe):  (Q13.1, Q13.2, Q13.3),  (Q20.1, Q20.2, Q20.3), (Q27.1, Q27.2, Q27.3). The X.1 response is ordinal, assign to $GD_priceo.nabe, and reverse code so higher values correspond to higher prices? To create the cardinal variable, follow protocol used to code the $shock10.rentc variables, above.  
+ # Nabe rent outcome ($GD.rento.nabe, $GD.rentc.nabe):  (Q14.1, Q14.2, Q14.3),  (Q21.1, Q21.2, Q21.3), (Q28.1, Q28.2, Q28.3). The X.1 response is ordinal, assign to $GD_rento.nabe, and reverse code so higher values correspond to higher prices? To create the cardinal variable, follow protocol used to code the $shock10.rentc variables, above. 
+D$GD.pricec.nabe<-D$GD.rentc.nabe<-D$GD.priceo.nabe<-D$GD.rento.nabe<-NA
+
+
+D <- D %>% mutate_at(vars(Q13.1,Q20.1, Q27.1), as.numeric) %>%
+  mutate(GD.priceo.nabe = case_when(!is.na(Q13.1) ~ Q13.1,
+                                          is.na(Q13.1) & !is.na(Q20.1) ~ Q20.1,
+                                          is.na(Q13.1) & is.na(Q20.1) ~ Q27.1)) %>%
+  mutate(GD.priceo.nabe = 6-GD.priceo.nabe)
+
+#Fixing coding 
+# D$GD.priceo.nabe[!is.na(D$Q13.1)]<-D$Q13.1[!is.na(D$Q13.1)]
+# D$GD.priceo.nabe[!is.na(D$Q20.1)]<-D$Q20.1[!is.na(D$Q20.1)]
+# D$GD.priceo.nabe[!is.na(D$Q27.1)]<-D$Q27.1[!is.na(D$Q27.1)]
+# D$GD.priceo.name<-6-as.numeric(D$GD.priceo.nabe)
+
+
+
+D$GD.pricec.nabe[D$GD.priceo.nabe==3]<-0
+D$GD.pricec.nabe.down.1<-recode(D$Q13.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.pricec.nabe.up.1<-recode(D$Q13.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.pricec.nabe.down.2<-recode(D$Q20.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.pricec.nabe.up.2<-recode(D$Q20.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.pricec.nabe.down.3<-recode(D$Q27.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.pricec.nabe.up.3<-recode(D$Q27.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.pricec.nabe[!is.na(D$GD.pricec.nabe.up.1)]<-D$GD.pricec.nabe.up.1[!is.na(D$GD.pricec.nabe.up.1)]
+D$GD.pricec.nabe[!is.na(D$GD.pricec.nabe.up.2)]<-D$GD.pricec.nabe.up.2[!is.na(D$GD.pricec.nabe.up.2)]
+D$GD.pricec.nabe[!is.na(D$GD.pricec.nabe.up.3)]<-D$GD.pricec.nabe.up.3[!is.na(D$GD.pricec.nabe.up.3)]
+D$GD.pricec.nabe[!is.na(D$GD.pricec.nabe.down.1)]<-D$GD.pricec.nabe.down.1[!is.na(D$GD.pricec.nabe.down.1)]
+D$GD.pricec.nabe[!is.na(D$GD.pricec.nabe.down.2)]<-D$GD.pricec.nabe.down.2[!is.na(D$GD.pricec.nabe.down.2)]
+D$GD.pricec.nabe[!is.na(D$GD.pricec.nabe.down.3)]<-D$GD.pricec.nabe.down.3[!is.na(D$GD.pricec.nabe.down.3)]
+
+D <- D %>% mutate_at(vars(Q14.1,Q21.1, Q28.1), as.numeric) %>%
+  mutate(GD.rento.nabe = case_when(!is.na(Q14.1) ~ Q14.1,
+                                          is.na(Q14.1) & !is.na(Q21.1) ~ Q21.1,
+                                          is.na(Q14.1) & is.na(Q21.1) ~ Q28.1)) %>%
+  mutate(GD.rento.nabe = 6-GD.rento.nabe)
+
+###Recoding this variable also for the same reason as the others. 
+# D$GD.rento.nabe[!is.na(D$Q14.1)]<-D$Q14.1[!is.na(D$Q14.1)]
+# D$GD.rento.nabe[!is.na(D$Q21.1)]<-D$Q21.1[!is.na(D$Q21.1)]
+# D$GD.rento.nabe[!is.na(D$Q28.1)]<-D$Q28.1[!is.na(D$Q28.1)]
+# D$GD.rento.nabe<-6-as.numeric(D$GD.rento.nabe)
+
+
+
+
+D$GD.rentc.nabe[D$GD.rento.nabe==3]<-0
+D$GD.rentc.nabe.down.1<-recode(D$Q14.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.rentc.nabe.up.1<-recode(D$Q14.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.rentc.nabe.down.2<-recode(D$Q21.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.rentc.nabe.up.2<-recode(D$Q21.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.rentc.nabe.down.3<-recode(D$Q28.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.rentc.nabe.up.3<-recode(D$Q28.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.rentc.nabe[!is.na(D$GD.rentc.nabe.up.1)]<-D$GD.rentc.nabe.up.1[!is.na(D$GD.rentc.nabe.up.1)]
+D$GD.rentc.nabe[!is.na(D$GD.rentc.nabe.up.2)]<-D$GD.rentc.nabe.up.2[!is.na(D$GD.rentc.nabe.up.2)]
+D$GD.rentc.nabe[!is.na(D$GD.rentc.nabe.up.3)]<-D$GD.rentc.nabe.up.3[!is.na(D$GD.rentc.nabe.up.3)]
+D$GD.rentc.nabe[!is.na(D$GD.rentc.nabe.down.1)]<-D$GD.rentc.nabe.down.1[!is.na(D$GD.rentc.nabe.down.1)]
+D$GD.rentc.nabe[!is.na(D$GD.rentc.nabe.down.2)]<-D$GD.rentc.nabe.down.2[!is.na(D$GD.rentc.nabe.down.2)]
+D$GD.rentc.nabe[!is.na(D$GD.rentc.nabe.down.3)]<-D$GD.rentc.nabe.down.3[!is.na(D$GD.rentc.nabe.down.3)]
+
+
+  # City rent outcome ($GD.rento.city, $GD.rentc.city):  (Q15.1, Q15.2, Q15.3),  (Q22.1, Q22.2, Q22.3), (Q29.1, Q29.2, Q29.3). The X.1 response is ordinal, assign to $GD_rento.city, and reverse code so higher values correspond to higher rents? To create the cardinal variable, follow protocol used to code the $shock10.rentc variables, above.
+## Q11.1: duplex/triplex
+
+D <- D %>% mutate_at(vars(Q15.1,Q22.1, Q29.1), as.numeric) %>%
+  mutate(GD.rento.city = case_when(!is.na(Q15.1) ~ Q15.1,
+                                          is.na(Q15.1) & !is.na(Q22.1) ~ Q22.1,
+                                          is.na(Q15.1) & is.na(Q22.1) ~ Q29.1)) %>%
+#  mutate(GD.rento.city = 6-GD.quant) CE 2022.04.03 miscoded in PAP
+  mutate(GD.rento.city = 6 - GD.rento.city)
+
+##This is also messed up and producing NAs, fixed it above. 
+# D$GD.rento.city<-NA
+# D$GD.rento.city[!is.na(D$Q15.1)]<-D$Q15.1[!is.na(D$Q15.1)]
+# D$GD.rento.city[!is.na(D$Q22.1)]<-D$Q22.1[!is.na(D$Q22.1)]
+# D$GD.rento.city[!is.na(D$Q29.1)]<-D$Q29.1[!is.na(D$Q29.1)]
+# D$GD.rento.city<-6-as.numeric(D$GD.rento.city)  
+
+###City Rent Percentage Shift
+
+D$GD.rentc.city[D$GD.rento.city==3]<-0
+D$GD.rentc.city.down.1<-recode(D$Q15.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.rentc.city.up.1<-recode(D$Q15.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.rentc.city.down.2<-recode(D$Q22.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.rentc.city.up.2<-recode(D$Q22.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.rentc.city.down.3<-recode(D$Q29.2, '1'=-0.01, '2'=-0.05, '3'=-0.10, '4'=-0.15, '5'=-0.20, '6'=-0.25, '7'=-0.30)
+D$GD.rentc.city.up.3<-recode(D$Q29.3, '1'=0.01, '2'=0.05, '3'=0.10, '4'=0.15, '5'=0.20, '6'=0.25, '7'=0.30)
+D$GD.rentc.city[!is.na(D$GD.rentc.city.up.1)]<-D$GD.rentc.city.up.1[!is.na(D$GD.rentc.city.up.1)]
+D$GD.rentc.city[!is.na(D$GD.rentc.city.up.2)]<-D$GD.rentc.city.up.2[!is.na(D$GD.rentc.city.up.2)]
+D$GD.rentc.city[!is.na(D$GD.rentc.city.up.3)]<-D$GD.rentc.city.up.3[!is.na(D$GD.rentc.city.up.3)]
+D$GD.rentc.city[!is.na(D$GD.rentc.city.down.1)]<-D$GD.rentc.city.down.1[!is.na(D$GD.rentc.city.down.1)]
+D$GD.rentc.city[!is.na(D$GD.rentc.city.down.2)]<-D$GD.rentc.city.down.2[!is.na(D$GD.rentc.city.down.2)]
+D$GD.rentc.city[!is.na(D$GD.rentc.city.down.3)]<-D$GD.rentc.city.down.3[!is.na(D$GD.rentc.city.down.3)]
+
+  # Home-value anxiety outcome ($GD.angst.price): Q16.1 Q23.1, Q30.1. Reverse code so that higher values correspond to more anxiety?
+  # Rent-value anxiety outcome ($GD.angst.rent): Q16.2 Q23.2, Q30.2. Reverse code so that higher values correspond to more anxiety?
+
+D <- D %>%
+  mutate(across(c(Q16.1, Q23.1, Q30.1, Q16.2, Q23.2, Q30.2), as.numeric)) %>%
+  mutate(GD.angst.price = 5 - coalesce(Q16.1, Q23.1, Q30.1)) %>%
+  mutate(GD.angst.rent = 5 - coalesce(Q16.2, Q23.2, Q30.2)) 
+
+## CE: encode embedded data fields $rent_zip, $price_zip, $price_city.  
+D <- D %>%
+  mutate(
+    rent.zip = parse_number(rent_zip),
+    price.zip = parse_number(price_zip),
+    rent.city = parse_number(rent_city),
+    price.city = parse_number(price_city),
+    )
+
+## CE: encode mast responses ($mast.afford, $mast.low): former is Q38.1, latter is Q38.2. Recode $mast.afford and $mast.low as NA if Q39.1 != 1. Q39.1 is attention check to see if respondent read the Mast question. We could throw out all responses from people who fail this check but my vote is to keep them. I'm expecting way more BS on the Mast Qs than the other Qs
+
+D <- D %>% 
+  mutate(
+    across(starts_with("Q38"), as.numeric),
+    mast.afford = Q38.1_10, #CE: FWIW, I don't understand why Qualtrics assigned a suffix to these slider responses, or why the suffix is different for Q38.1 vs. Q38.2
+    mast.low = Q38.2_4
+  )
+D$mast.afford[D$Q39.1 != 1] <- NA 
+D$mast.low[D$Q39.1 != 1] <- NA 
+
+## Rename other colums for ease of use
+
+D <- D%>%
+  mutate(
+    zip = Q1.2,
+    educ = as.numeric(Q6.4),
+    rent.zip.quintile = quantcut(parse_number(rent_zip), 5),
+    rent.city.quintile = quantcut(parse_number(rent_city), 5),
+    price.zip.quintile = quantcut(parse_number(price_zip), 5),
+    price.city.quintile = quantcut(parse_number(price_city), 5),
+    rent.zip.tercile = quantcut(parse_number(rent_zip), 3),
+    rent.city.tercile = quantcut(parse_number(rent_city), 3),
+    price.zip.tercile = quantcut(parse_number(price_zip), 3),
+    price.city.tercile = quantcut(parse_number(price_city), 3),
+    want.price2 = factor(want.price, levels = c("Lower", "Same", "Higher")),
+    want.price2 = fct_collapse(D$want.price, 
+                               Lower = "Lower", Not_lower = c("Higher", "Same")),
+    GD.treat = factor(GD.treat, levels = c("neighborhood", "city", "state"))
+  )
+
+levels(D$rent.zip.quintile) <- c("rent.zip.q5.1", "rent.zip.q5.2", "rent.zip.q5.3", "rent.zip.q5.4", "rent.zip.q5.5")
+levels(D$rent.city.quintile) <- c("rent.city.q5.1", "rent.city.q5.2", "rent.city.q5.3", "rent.city.q5.4", "rent.city.q5.5")
+levels(D$price.zip.quintile) <- c("price.zip.q5.1", "price.zip.q5.2", "price.zip.q5.3", "price.zip.q5.4", "price.zip.q5.5")
+levels(D$price.city.quintile) <- c("price.city.q5.1", "price.city.q5.2", "price.city.q5.3", "price.city.q5.4", "price.city.q5.5")
+
+levels(D$rent.zip.tercile) <- c("rent.zip.q3.1", "rent.zip.q3.2", "rent.zip.q3.3", "rent.zip.q3.4", "rent.zip.q3.5")
+levels(D$rent.city.tercile) <- c("rent.city.q3.1", "rent.city.q3.2", "rent.city.q3.3", "rent.city.q3.4", "rent.city.q3.5")
+levels(D$price.zip.tercile) <- c("price.zip.q3.1", "price.zip.q3.2", "price.zip.q3.3", "price.zip.q3.4", "price.zip.q3.5")
+levels(D$price.city.tercile) <- c("price.city.q3.1", "price.city.q3.2", "price.city.q3.3", "price.city.q3.4", "price.city.q3.5")
+```
+
+
+## The Issue
+
+
+::: columns
+
+:::: column
+
+> - Many American cities are suffering through the worst housing crisis in living memory. 
+
+> - This crisis stems from decades of underbuilding relative to population. 
+
+> - The nascent YIMBY movement has highlighted the housing shortage and the barriers to new construction, but...
+>     + People who suffer from the supply crisis oppose attempts to solve it!
+
+::::
+
+:::: column
+
+
+![NYers rally against an upzoning of SoHo/NoHo in June 2021.](images/soho_rezone.jpg)
+
+::::
+
+:::
+
+## Homo Economicus meets "Homo Domicilium"
+
+> - People have differing mental models they use to understand policy and predict results (Stancheva 2020).
+
+> - People's views on housing are skewed by existing economic interests (Fischel 2005).
+
+> - People have differing motivations to contact elect officials and participate in government mettings surrounding housing (Einstein et al 2019).
+
+## Is the Mass Public Supply Skeptical?
+
+> - Consensus view among economists and other social scientists is that a housing supply shortage is to blame for the current crisis.
+
+> - View among political elites is mixed.
+>     + Elected officials and interest groups express skepticism about measures to increase housing supply.
+
+> - But view among general public is also mixed.
+>   + 2019 California YIMBY survey: 
+>       + Building more types of housing will increase the cost of housing: 21 percent.
+>       + Building more types of housing will have no effect on the cost of housing: 34 percent.
+
+> - Big Questions: 
+      + Is "supply skepticism" a prevailing view among the general public? 
+      + Which types of people are more likely to be supply skeptical? 
+      + Are there any types of pro-supply interventions these people are more likely to support?
+      
+      
+## Our Pilot Survey
+
+> - `r nrow(D) %>% prettyNum(big.mark=",")` people across the non-rural United States surveyed between `r format(as.Date(min(D$StartDate)),"%B %d")` and `r format(as.Date(max(D$StartDate)),"%B %d")`, 2022. 
+
+> - Collected general attitudes towards housing and land use policy. 
+
+> - Performed a variety of survey experiments to measure how variation in the scale of reforms affects support. 
+
+> - Measured knowledge of filtering and naturally-occurring affordable housing.
+
+## Respondent Demographics
+
+```{r demographics, echo=F, message=F}
+
+D %>% select(male, age.cat, race.eth) %>% tbl_summary(digits = all_continuous() ~ 2,)
+
+```
+
+
+## Respondent Demographics, (cont.)
+
+
+```{r , echo=F, message=F}
+D %>% select(employed.ft, has.kids, pid3.wlean, price.city, has.ba, ownhome) %>% tbl_summary(digits = all_continuous() ~ 2,)
+```
+
+
+## Open-Ended Responses
+
+> - Asked respondents about their main considerations for land use regulation, what the goals of good land use policy should be and what the problems are currently with zoning and land use regulation. 
+
+> - Typical responses:
+>     + "I think about the need for affordable housing that just keeps getting worse"
+>     + "I AM CONCERNED ABOUT THE COST OF HOMES AND RENT"
+>     + "WAY overdevelopment beyond what infrastructure can support and have major detrimental impact on wildlife"
+
+## Homeowner vs. Renter Open-Ended Responses
+
+```{r, echo=F, message=F}
+key_analysis <- corpus(c(D$landuse.consider,D$landuse.goals, D$landuse.problems)) 
+
+key_analysis$own_rent <- ifelse(D$ownhome==1, "Homeowner","Renter")
+
+key_analysis <- key_analysis %>% corpus_subset(!is.na(own_rent)) 
+
+##Owners vs Renters
+key_analysis%>%
+  tokens(remove_punct = T) %>% 
+    tokens_remove(stopwords("english")) %>%
+  dfm() %>% textstat_keyness(., target = key_analysis$own_rent=="Renter") %>% 
+  textplot_keyness(n=10, labelsize = 3) + theme(legend.position = "bottom") +
+  scale_color_manual("",labels=c("Renters","Homeowners"), values=c("blue","red"))
+
+
+```
+
+
+## Gentle Density
+
+> - We present a fictitious upzoning scenario where all new and renovated buildings can be 1.5 times as tall as nearby homes and duplexes/triplexes are allowed in single-family zoned areas. 
+
+> - Varied whether the changes took place in respondent's neighborhood, city or state. 
+
+> - Asked respondents to predict the effects of these upzonings on rents and home prices. 
+>   + Also asked whether rezonings would decrease value of home/increase rent and what effect changes would have on the metro area housing stock. 
+
+
+```{r, echo=FALSE,out.width="49%",out.height="49%",fig.show='hold', fig.align='center'}
+
+knitr::include_graphics(c("/home/modalbro/Dropbox/local_ideology/notes/survey - images/Alfred Twu, Illustrations of Incremental Upzone/houses-new-house.jpg",'/home/modalbro/Dropbox/local_ideology/notes/survey - images/Alfred Twu, Illustrations of Incremental Upzone/houses-new-triplex-2.jpg'))
+
+```
+
+
+## Gentle Density Responses, All Levels.
+
+```{r gdhist, echo=F, message=F}
+
+D %>% select(shock10.rentc.city, shock10.pricec.city) %>%
+  pivot_longer(cols = 1:2) %>%
+  ggplot(aes(x=value, fill=name)) + geom_histogram(position="dodge") +
+  scale_x_continuous("Predicted Percent Shift", breaks=seq(-.4,.4, by=.05)) + 
+  ylab("Count") +
+  theme_bw() + scale_fill_discrete("",labels=c("Home Price","Rent")) +
+  theme(legend.position = "bottom")
+
+```
+
+
+## Do People Know About How Used Car Markets Work?
+
+```{r, echo=F, message=F}
+
+D %>% filter(!is.na(Q36.2)) %>% ggplot(aes(x=factor(Q36.2))) + geom_bar(fill="darkblue") +
+  ggtitle("If supply-chain problems cause automakers to produce fewer new cars, what happens to the price of used cars?") + ylab("Count") + scale_x_discrete("Used cars become...",labels=c("More expensive","Less expensive","No change")) +theme_bw()
+
+```
+
+
+## Are any Groups Better at Predicting the Effects of Added Supply?
+
+
+```{r gdResults, echo=F, message=F}
+
+rents <- D %>% lm_robust(shock10.rentc.city ~ rent.city.tercile + know.PC1 + ownhome + 
+                           want.price2, data=.)
+
+prices <- D %>% lm_robust(shock10.pricec.city ~ rent.city.tercile + know.PC1 + ownhome + 
+                           want.price2, data=.)
+
+dwplot(list(rents, prices), show_intercept = T, vline = geom_vline(xintercept = 0,linetype="dashed")) %>%
+  relabel_predictors(c('(Intercept)'="Intercept",
+                       rent.city.tercilerent.city.q3.2 = "City Rent in Mid Terc.",
+                       rent.city.tercilerent.city.q3.3 = "City Rent in High Terc.",
+                       know.PC1 = "Economic Knowledge",
+                       ownhome = "Homeowner",
+                       want.price2Lower = "Wants Housing Prices to be Lower"))  +
+    theme_bw() + ggtitle("Effect of 10% increase in housing supply on...")+
+  theme(legend.position="bottom") +
+  scale_color_discrete("Model",labels=c("Rents","Prices")) 
+
+```
+
+
+## Who Supports Gentle Density Reforms?
+
+
+```{r supportGD, echo=F,message=F}
+
+D %>% lm_robust(GD.support ~ GD.treat + price.city.tercile + want.price2 + ownhome +
+                  pid3.wlean + know.PC1 + free.PC1, data=.) %>% dwplot(show_intercept = T, vline = geom_vline(xintercept = 0,linetype="dashed")) %>%
+  relabel_predictors(c('(Intercept)'="Intercept",
+                       GD.treatcity = "City Treatment",
+                       GD.treatstate = "State Treatment",
+                       pid3.wleanio = "Independent",
+                       pid3.wleanrep = "GOP",
+                       free.PC1 = "Economic Freedom",
+                       price.city.tercileprice.city.q3.2 = "City Rent in Mid Terc.",
+                       price.city.tercileprice.city.q3.3 = "City Rent in High Terc.",
+                       know.PC1 = "Economic Knowledge",
+                       ownhome = "Homeowner",
+                       want.price2Lower = "Wants Housing Prices to be Lower"))  +
+  theme_bw() +
+  theme(legend.position = "none")
+  
+
+```
+
+
+## Do "Anxious People" Have a Better Understanding of the Market?
+
+- Defined "anxiety" as:
+    + Fear that home value will drop for homeowners.
+    + Fear rent will go up for renters.
+    
+```{r, echo=F, message=F}
+
+owner <-  D %>%
+ filter(ownhome == 1) %>% 
+ lm_robust(GD.support ~ GD.angst.price + free.PC1+ know.PC1 + pid3.wlean + loc.PC1, data=., se_type="stata", clusters=GD.treat)
+
+tenant <-  D %>%
+ filter(ownhome != 1) %>% 
+ lm_robust(GD.support ~ GD.angst.rent + free.PC1+ know.PC1 + pid3.wlean + loc.PC1, data=., se_type="stata", clusters=GD.treat)
+
+dwplot(list(owner, tenant),show_intercept = T, vline = geom_vline(xintercept = 0,linetype="dashed")) %>%
+  relabel_predictors(c('(Intercept)'="Intercept",
+                       GD.angst.price = "Fear for Home Values",
+                       pid3.wleanio = "Independent",
+                       pid3.wleanrep = "GOP",
+                       loc.PC1 = "Localism",
+                       free.PC1 = "Economic Freedom",
+                       GD.angst.rent = "Fear for Rent",
+                       know.PC1 = "Economic Knowledge"))  +
+  theme_bw() + xlab("Support for Gentle Density Reforms") +
+  scale_color_discrete("Model", labels=c("Homeowners","Renters"))+
+  theme(legend.position = "bottom")
+
+
+
+```
+
+
+## Takeaways
+
+> - Affordability is at the top of mind for people, especially renters, when talking about housing. 
+
+> - However, people have an incoherent notion of how housing markets work even if they understand how markets for other goods, (i.e. used cars), work. 
+
+> - Both "anxious" homeowners and renters fear upzoning, though the predicted outcome they fear is completely opposite. 
+
+
+## What We Want to Do in the Future
+
+- Here are studies we want to pursue along these lines.
+
+- Give us money for XXXX, YYYY and ZZZZ, please. 
+
